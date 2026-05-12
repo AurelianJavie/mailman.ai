@@ -2,17 +2,27 @@
   "manifest_version": 3,
   "name": "Smart Email Manager",
   "version": "1.0",
-  "description": "Test pipeline: send dummy email data to FastAPI.",
+  "description": "Test pipeline: send real Gmail email data to FastAPI.",
   "action": {
     "default_popup": "popup.html"
   },
   "permissions": [
-    "storage"         
+    "storage",
+    "scripting",
+    "activeTab"
   ],
   "host_permissions": [
-    "http://127.0.0.1:8000/*"
+    "http://127.0.0.1:8000/*",
+    "https://mail.google.com/*"
   ],
   "background": {
     "service_worker": "background.js"
+  },
+ "content_scripts": [
+  {
+    "matches": ["https://mail.google.com/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
   }
+]
 }
