@@ -46,7 +46,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const payload = {
         sender: emailInfo.sender,
-        body: emailInfo.body
+        body: emailInfo.body,
+        subject: emailInfo.subject || ""
       };
 
       // 3) Send to FastAPI

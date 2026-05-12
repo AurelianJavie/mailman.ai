@@ -1,20 +1,6 @@
 // content.js
 console.log("content.js injected into", window.location.href);
 
-function getCurrentEmailInfo() {
-  const sender =
-    document.querySelector("span[email]")?.getAttribute("email") ||
-    document.querySelector("span[aria-hidden='true']")?.innerText ||
-    "unknown@sender.com";
-
-  const body =
-    document.querySelector("div[role='listitem'] div[dir='ltr']")?.innerText ||
-    document.body.innerText.slice(0, 1000) ||
-    "No body found";
-
-  return { sender, body };
-}
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("Message received in content.js:", message);
 
@@ -25,3 +11,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 });
+function getCurrentEmailInfo() {
+  const subject =
+    document.querySelector("h2[data-legacy-thread-id]")?.innerText ||
+    document.querySelector("h2.hP")?.innerText || // older class
+    "";
+
+  const sender =
+    document.querySelector("span[email]")?.getAttribute("email") ||
+    document.querySelector("span[aria-hidden='true']")?.innerText ||
+    "unknown@sender.com";
+
+  const bodyElement =
+    document.querySelector("div[role='listitem'] div[dir='ltr']") ||
+    document.querySelector("div.a3s"); // Gmail body container fallback
+
+  const body = bodyElement?.innerText || "No body found";
+
+  return { subject, sender, body };
+}
