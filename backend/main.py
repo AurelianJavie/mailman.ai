@@ -35,6 +35,15 @@ class EmailOut(BaseModel):
     priority: str
     summary: str
 
+class EmailLogOut(BaseModel):
+    id: int
+    sender: str
+    body: str
+    category: str
+    priority: str
+    created_at: datetime
+
+    
 
 class EmailOut(BaseModel):
     category: str
