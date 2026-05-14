@@ -83,41 +83,66 @@ function loadOverview() {
 
 // ─── Inbox tab ────────────────────────────────────────────────────────────────
 function loadEmails() {
-  chrome.tabs.query({ url: "https://mail.google.com/*" }, (tabs) => {
-    if (!tabs || !tabs.length) {
-      showNoGmailMsg("email-list");
-      showNoGmailMsg("summary-email-list");
+  // Query ALL tabs then filter manually — chrome.tabs.query({ url }) requires
+  // the "tabs" permission AND is unreliable in MV3 popup context on some builds.
+  chrome.tabs.query({}, (allTabs) => {
+    const gmailTab = allTabs.find(t =>
+      t.url && t.url.startsWith("https://mail.google.com")
+    );
+
+    if (!gmailTab) {
+      showNoGmailMsg("email-list", "No Gmail tab found — open Gmail and try again.");
+      showNoGmailMsg("summary-email-list", "No Gmail tab found — open Gmail and try again.");
       return;
     }
 
-    const gmailTab = tabs[0];
-
-    // PING first — confirm content script is alive before sending GET_EMAIL_LIST
+    // PING — confirm content script is alive in that tab
     chrome.tabs.sendMessage(gmailTab.id, { type: "PING" }, (pingRes) => {
-      if (chrome.runtime.lastError || !pingRes?.pong) {
-        // Content script not ready (page still loading, or wrong tab)
-        showNoGmailMsg("email-list");
-        showNoGmailMsg("summary-email-list");
+      // Swallow lastError so Chrome doesn't log an unchecked error
+      void chrome.runtime.lastError;
+
+      if (!pingRes?.pong) {
+        // Content script not injected yet (page still loading)
+        showNoGmailMsg("email-list", "Gmail is loading — please wait a moment and reopen the popup.");
+        showNoGmailMsg("summary-email-list", "Gmail is loading — please wait a moment and reopen the popup.");
         return;
       }
 
       chrome.tabs.sendMessage(gmailTab.id, { type: "GET_EMAIL_LIST" }, (emails) => {
-        if (chrome.runtime.lastError) {
-          showNoGmailMsg("email-list");
-          showNoGmailMsg("summary-email-list");
-          return;
-        }
+        void chrome.runtime.lastError;
+
         emailCache = emails || [];
-        renderEmailList("email-list",         emailCache, true);
-        renderEmailList("summary-email-list", emailCache, false);
+
+        if (!emailCache.length) {
+          // Gmail is open but we're on a single-email view (no tr.zA rows visible).
+          // Fall back: grab the currently open email as a single-item list.
+          chrome.tabs.sendMessage(gmailTab.id, { type: "GET_EMAIL_INFO" }, (info) => {
+            void chrome.runtime.lastError;
+            if (info && (info.subject || info.sender)) {
+              // Synthesise a minimal email object so the rest of the UI works
+              emailCache = [{
+                id:      "current",
+                sender:  info.sender  || "",
+                subject: info.subject || "(no subject)",
+                snippet: info.body?.slice(0, 120) || "",
+                body:    info.body    || ""
+              }];
+            }
+            renderEmailList("email-list",         emailCache, true);
+            renderEmailList("summary-email-list", emailCache, false);
+          });
+        } else {
+          renderEmailList("email-list",         emailCache, true);
+          renderEmailList("summary-email-list", emailCache, false);
+        }
       });
     });
   });
 }
 
-function showNoGmailMsg(containerId) {
+function showNoGmailMsg(containerId, msg) {
   const el = document.getElementById(containerId);
-  if (el) el.innerHTML = `<div class="loading-msg">Open Gmail in a tab first.</div>`;
+  if (el) el.innerHTML = `<div class="loading-msg">${msg || "Open Gmail in a tab first."}</div>`;
 }
 
 function renderEmailList(containerId, emails, showBadges) {
