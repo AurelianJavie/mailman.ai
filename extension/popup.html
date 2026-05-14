@@ -1,19 +1,144 @@
-
 <!DOCTYPE html>
-<html>
-  <head>
-    <title>Smart Email Manager</title>
-  </head>
-  <body>
-    <h3>Smart Email Manager</h3>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MailMan.ai</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
 
-    <button id="analyzeBtn">Send Test Email</button>
-    <pre id="result"></pre>
+<div class="shell">
 
-    <button id="listBtn">Show Recent Emails</button>
-    <pre id="listResult"></pre>
+  <!-- ── Header ── -->
+  <header class="glass-header">
+    <div class="logo-orb" aria-hidden="true">✉</div>
+    <div class="header-text">
+      <h1>MailMan.ai</h1>
+      <p>Smart inbox manager</p>
+    </div>
+    <div class="status-dot" id="status-dot">Live</div>
+  </header>
 
-    <!-- Very important: this must match the filename exactly -->
-    <script src="popup.js"></script>
-  </body>
+  <!-- ── Nav tabs ── -->
+  <nav class="nav-tabs" role="tablist">
+    <button class="nav-tab active" role="tab" data-tab="overview"  onclick="switchTab('overview')">Overview</button>
+    <button class="nav-tab"        role="tab" data-tab="inbox"     onclick="switchTab('inbox')">Inbox</button>
+    <button class="nav-tab"        role="tab" data-tab="otp"       onclick="switchTab('otp')">OTP</button>
+    <button class="nav-tab"        role="tab" data-tab="summary"   onclick="switchTab('summary')">Summary</button>
+  </nav>
+
+  <!-- ─────────────────────── TAB: OVERVIEW ─────────────────────── -->
+  <section class="tab-content active" id="tab-overview" role="tabpanel">
+
+    <div class="glass-card">
+      <div class="card-header">📊 Inbox snapshot</div>
+      <div class="stats-grid">
+        <div class="stat-cell">
+          <span class="stat-num" id="stat-total">—</span>
+          <span class="stat-label">Total emails</span>
+        </div>
+        <div class="stat-cell">
+          <span class="stat-num green" id="stat-important">—</span>
+          <span class="stat-label">Important</span>
+        </div>
+        <div class="stat-cell">
+          <span class="stat-num red" id="stat-spam">—</span>
+          <span class="stat-label">Suspected spam</span>
+        </div>
+        <div class="stat-cell">
+          <span class="stat-num amber" id="stat-promo">—</span>
+          <span class="stat-label">Promotional</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="glass-card">
+      <div class="card-header">📂 Breakdown</div>
+      <div class="cat-list" id="cat-list">
+        <div class="cat-row">
+          <span class="cat-dot" style="background:#2a8fd8"></span>
+          <span class="cat-name">Work / employer</span>
+          <span class="cat-count" id="cat-work">—</span>
+          <div class="bar-wrap"><div class="bar-fill blue" id="bar-work"></div></div>
+        </div>
+        <div class="cat-row">
+          <span class="cat-dot" style="background:#3ecf5a"></span>
+          <span class="cat-name">Travel &amp; tickets</span>
+          <span class="cat-count" id="cat-travel">—</span>
+          <div class="bar-wrap"><div class="bar-fill green" id="bar-travel"></div></div>
+        </div>
+        <div class="cat-row">
+          <span class="cat-dot" style="background:#e04040"></span>
+          <span class="cat-name">Spam</span>
+          <span class="cat-count" id="cat-spam">—</span>
+          <div class="bar-wrap"><div class="bar-fill red" id="bar-spam"></div></div>
+        </div>
+        <div class="cat-row">
+          <span class="cat-dot" style="background:#d07020"></span>
+          <span class="cat-name">Promotions</span>
+          <span class="cat-count" id="cat-promo">—</span>
+          <div class="bar-wrap"><div class="bar-fill amber" id="bar-promo"></div></div>
+        </div>
+        <div class="cat-row">
+          <span class="cat-dot" style="background:#7a4ab0"></span>
+          <span class="cat-name">OTP / codes</span>
+          <span class="cat-count" id="cat-otp">—</span>
+          <div class="bar-wrap"><div class="bar-fill purple" id="bar-otp"></div></div>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ─────────────────────── TAB: INBOX ─────────────────────── -->
+  <section class="tab-content" id="tab-inbox" role="tabpanel">
+    <p class="section-label">Tap an email · then choose an action</p>
+    <div class="glass-card">
+      <div class="email-list" id="email-list">
+        <div class="loading-msg">Loading emails…</div>
+      </div>
+      <div class="action-bar">
+        <button class="action-btn primary" id="btn-summarize" onclick="summarizeSelected()">✦ Summarize</button>
+        <button class="action-btn danger"  id="btn-delete"    onclick="deleteSelected()">🗑 Delete</button>
+      </div>
+    </div>
+    <div class="glass-card" id="inbox-summary-box" style="display:none">
+      <div class="card-header">✦ AI summary</div>
+      <div class="summary-body" id="inbox-summary-body"></div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────── TAB: OTP ─────────────────────── -->
+  <section class="tab-content" id="tab-otp" role="tabpanel">
+    <p class="section-label">One-time codes — tap 📋 to copy, 🗑 to delete</p>
+    <div class="glass-card" id="otp-card">
+      <div class="otp-list" id="otp-list">
+        <div class="loading-msg">Scanning for OTP emails…</div>
+      </div>
+    </div>
+    <div id="copy-toast" class="toast hidden">✓ Code copied to clipboard!</div>
+    <div class="glass-card" style="padding:12px 14px">
+      <p class="privacy-note">🔒 Codes are read live from Gmail. Deleting removes the email from your inbox permanently.</p>
+    </div>
+  </section>
+
+  <!-- ─────────────────────── TAB: SUMMARY ─────────────────────── -->
+  <section class="tab-content" id="tab-summary" role="tabpanel">
+    <p class="section-label">Select any email to get an AI summary</p>
+    <div class="glass-card">
+      <div class="email-list" id="summary-email-list">
+        <div class="loading-msg">Loading emails…</div>
+      </div>
+    </div>
+    <div class="glass-card" id="summary-result-box" style="display:none">
+      <div class="card-header">✦ Summary — <span id="summary-sender-label"></span></div>
+      <div class="summary-body" id="summary-result-body"></div>
+    </div>
+  </section>
+
+</div><!-- .shell -->
+
+<script src="popup.js"></script>
+</body>
 </html>
