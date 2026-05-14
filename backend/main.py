@@ -1,6 +1,8 @@
 from datetime import datetime
+from pathlib import Path
 from typing import List
 
+import joblib
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -10,6 +12,7 @@ from database import SessionLocal, Base, engine
 from models import Watchlist, EmailLog
 
 app = FastAPI()
+
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -22,28 +25,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ---------- ML classifier load (sklearn) ----------
+
+CLASSIFIER = None
+
+
+def load_email_classifier():
+    global CLASSIFIER
+    model_path = Path(__file__).parent / "email_classifier.pkl"
+    if model_path.exists():
+        CLASSIFIER = joblib.load(model_path)
+        print("Loaded email_classifier.pkl")
+    else:
+        CLASSIFIER = None
+        print("email_classifier.pkl not found, ML classifier disabled")
+
+
+load_email_classifier()
+
+
 # ---------- Pydantic models ----------
 
 class EmailIn(BaseModel):
     sender: str
     body: str
     subject: str | None = ""
-
-
-class EmailOut(BaseModel):
-    category: str
-    priority: str
-    summary: str
-
-class EmailLogOut(BaseModel):
-    id: int
-    sender: str
-    body: str
-    category: str
-    priority: str
-    created_at: datetime
-
-    
 
 class EmailOut(BaseModel):
     category: str
@@ -53,6 +60,16 @@ class EmailOut(BaseModel):
     is_phishing: bool
     is_subscription: bool
     has_hidden_fees: bool
+    ml_label: str | None = None
+
+class EmailLogOut(BaseModel):
+    id: int
+    sender: str
+    body: str
+    category: str
+    priority: str
+    ml_label: str | None = None
+    created_at: datetime
 
     class Config:
         from_attributes = True  # Pydantic v2
@@ -80,18 +97,32 @@ def analyze_email(payload: EmailIn, db: Session = Depends(get_db)):
     body = payload.body
     subject = payload.subject or ""
 
-    # 1) Watchlist check (override category/priority if found)
+    # Watchlist override
     wl = db.query(Watchlist).filter(Watchlist.email == sender).first()
 
     # Rule-based analysis
     auto_category = detect_category(sender, subject, body)
     auto_priority = classify_priority(sender, subject, body)
-    is_spam, is_phishing = detect_spam_and_phishing(sender, subject, body)
+    is_spam_rule, is_phishing = detect_spam_and_phishing(sender, subject, body)
     is_subscription, subscription_type, has_hidden_fees = detect_subscription_and_fees(
         sender, subject, body
     )
 
-    # If sender in watchlist, force category + High priority
+    # ML classifier prediction (optional)
+    ml_label = None
+    if CLASSIFIER is not None:
+        text_for_model = f"{subject} {body}"
+        try:
+            ml_label = CLASSIFIER.predict([text_for_model])[0]
+        except Exception as e:
+            print("Email classifier error:", e)
+
+    # Use ML label to strengthen subscription/hidden-fee detection
+    if ml_label == "subscription_hidden_fee":
+        is_subscription = True
+        has_hidden_fees = True
+
+    # Final category/priority (watchlist has highest priority)
     if wl:
         category = wl.category or auto_category
         priority = "High"
@@ -101,33 +132,28 @@ def analyze_email(payload: EmailIn, db: Session = Depends(get_db)):
 
     summary = f"Email from {sender} categorized as {category}, priority {priority}."
 
-    # 2) Save log into database (keep schema simple for now)
+    # Save log
     log = EmailLog(
         sender=sender,
         body=body,
         category=category,
         priority=priority,
-        # Agar EmailLog model me ye fields add karna chaho to uncomment karo:
-        # is_spam=is_spam,
-        # is_phishing=is_phishing,
-        # is_subscription=is_subscription,
-        # has_hidden_fees=has_hidden_fees,
+        ml_label=ml_label,
     )
     db.add(log)
     db.commit()
     db.refresh(log)
 
-    # 3) Return full analysis
     return EmailOut(
         category=category,
         priority=priority,
         summary=summary,
-        is_spam=is_spam,
+        is_spam=is_spam_rule,
         is_phishing=is_phishing,
         is_subscription=is_subscription,
         has_hidden_fees=has_hidden_fees,
+        ml_label=ml_label,
     )
-
 
 @app.get("/list_emails", response_model=List[EmailLogOut])
 def list_emails(limit: int = 20, db: Session = Depends(get_db)):
@@ -146,13 +172,42 @@ def classify_priority(sender: str, subject: str, body: str) -> str:
     sender_lower = sender.lower()
     score = 0
 
-    # ... existing scoring rules ...
+    urgent_keywords = ["urgent", "immediately", "asap", "action required", "last chance"]
+    for word in urgent_keywords:
+        if word in text:
+            score += 2
 
-    # Social senders or social-like content => slightly lower
+    deadline_keywords = ["today", "tomorrow", "within 24 hours", "due date", "deadline"]
+    for word in deadline_keywords:
+        if word in text:
+            score += 1
+
+    important_keywords = ["payment", "invoice", "transaction", "security alert", "login attempt"]
+    for word in important_keywords:
+        if word in text:
+            score += 2
+
+    promo_keywords = ["sale", "discount", "offer", "newsletter", "promotion", "deal"]
+    for word in promo_keywords:
+        if word in text:
+            score -= 1
+
+    # Social / low‑importance senders
     social_domains = ["linkedin.com", "facebookmail.com", "instagram.com", "twitter.com", "x.com"]
     social_keywords = ["liked your post", "commented on", "followed you", "connection request"]
     if any(d in sender_lower for d in social_domains) or any(k in text for k in social_keywords):
         score -= 1
+
+    # Service / policy notifications from Google/YouTube
+    service_domains = ["accounts.google.com", "youtube.com", "google.com"]
+    policy_keywords = [
+        "terms of service",
+        "community guidelines",
+        "privacy policy",
+        "mandatory email service announcement",
+    ]
+    if any(d in sender_lower for d in service_domains) and any(k in text for k in policy_keywords):
+        score += 1
 
     if score >= 3:
         return "High"
@@ -166,7 +221,7 @@ def detect_category(sender: str, subject: str, body: str) -> str:
     text = f"{subject} {body}".lower()
     sender_lower = sender.lower()
 
-    # 1) Social / network notifications
+    # Social / network notifications
     social_domains = ["linkedin.com", "facebookmail.com", "instagram.com", "twitter.com", "x.com"]
     social_keywords = [
         "liked your post",
@@ -176,35 +231,56 @@ def detect_category(sender: str, subject: str, body: str) -> str:
         "followed you",
         "new follower",
         "people you may know",
-        "suggested for you"
+        "suggested for you",
     ]
     if any(d in sender_lower for d in social_domains) or any(k in text for k in social_keywords):
         return "Social"
 
-    # 2) Work
+    # Service / policy notifications (Google, YouTube, etc.)
+    service_domains = ["accounts.google.com", "youtube.com", "google.com"]
+    service_keywords = [
+        "terms of service",
+        "community guidelines",
+        "privacy policy",
+        "mandatory email service announcement",
+        "security alert",
+        "policy update",
+    ]
+    if any(d in sender_lower for d in service_domains) and any(k in text for k in service_keywords):
+        return "Notifications"
+
+    # Work
     work_keywords = ["meeting", "project", "deadline", "client", "task", "assignment"]
     if any(w in text for w in work_keywords):
         return "Work"
 
-    # 3) Transactions
+    # Transactions
     transaction_keywords = ["invoice", "payment", "transaction", "receipt", "order", "purchase"]
     if any(w in text for w in transaction_keywords):
         return "Transactions"
 
-    # 4) Notifications
+    # Notifications (general)
     notification_keywords = ["notification", "alert", "login", "security", "otp", "verification code"]
     if any(w in text for w in notification_keywords):
         return "Notifications"
 
-    # 5) Promotions
+    # Promotions
     promo_keywords = [
-        "sale", "discount", "offer", "deal", "coupon",
-        "limited time", "hiring for", "apply now", "followers", "suggested for you"
+        "sale",
+        "discount",
+        "offer",
+        "deal",
+        "coupon",
+        "limited time",
+        "hiring for",
+        "apply now",
+        "followers",
+        "suggested for you",
     ]
     if any(w in text for w in promo_keywords):
         return "Promotions"
 
-    # 6) Personal
+    # Personal
     personal_keywords = ["dear", "hi ", "hello", "regards", "thank you"]
     if any(w in text for w in personal_keywords):
         return "Personal"

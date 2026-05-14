@@ -18,4 +18,6 @@ class EmailLog(Base):
     body = Column(String, nullable=False)
     category = Column(String, nullable=False)
     priority = Column(String, nullable=False)
+    ml_label = Column(String, nullable=True, index=True)  # ML / manual label
     created_at = Column(DateTime, default=datetime.utcnow)
+
