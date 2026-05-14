@@ -83,8 +83,6 @@ function loadOverview() {
 
 // ─── Inbox tab ────────────────────────────────────────────────────────────────
 function loadEmails() {
-  // Query ALL tabs then filter manually — chrome.tabs.query({ url }) requires
-  // the "tabs" permission AND is unreliable in MV3 popup context on some builds.
   chrome.tabs.query({}, (allTabs) => {
     const gmailTab = allTabs.find(t =>
       t.url && t.url.startsWith("https://mail.google.com")
@@ -96,47 +94,49 @@ function loadEmails() {
       return;
     }
 
-    // PING — confirm content script is alive in that tab
-    chrome.tabs.sendMessage(gmailTab.id, { type: "PING" }, (pingRes) => {
-      // Swallow lastError so Chrome doesn't log an unchecked error
-      void chrome.runtime.lastError;
-
-      if (!pingRes?.pong) {
-        // Content script not injected yet (page still loading)
-        showNoGmailMsg("email-list", "Gmail is loading — please wait a moment and reopen the popup.");
-        showNoGmailMsg("summary-email-list", "Gmail is loading — please wait a moment and reopen the popup.");
-        return;
-      }
-
-      chrome.tabs.sendMessage(gmailTab.id, { type: "GET_EMAIL_LIST" }, (emails) => {
+    // Force-inject content.js into the Gmail tab every time the popup opens.
+    // This guarantees the listener is live regardless of whether the passive
+    // content_scripts declaration fired (Brave shields can block that).
+    chrome.scripting.executeScript(
+      { target: { tabId: gmailTab.id }, files: ["content.js"] },
+      () => {
+        // executeScript callback fires after injection is complete (or fails).
+        // Swallow any error (e.g. already injected — duplicate listeners are
+        // harmless because we guard with a flag inside content.js).
         void chrome.runtime.lastError;
 
-        emailCache = emails || [];
+        // Small delay to let the newly injected listener register
+        setTimeout(() => fetchEmailsFromTab(gmailTab.id), 100);
+      }
+    );
+  });
+}
 
-        if (!emailCache.length) {
-          // Gmail is open but we're on a single-email view (no tr.zA rows visible).
-          // Fall back: grab the currently open email as a single-item list.
-          chrome.tabs.sendMessage(gmailTab.id, { type: "GET_EMAIL_INFO" }, (info) => {
-            void chrome.runtime.lastError;
-            if (info && (info.subject || info.sender)) {
-              // Synthesise a minimal email object so the rest of the UI works
-              emailCache = [{
-                id:      "current",
-                sender:  info.sender  || "",
-                subject: info.subject || "(no subject)",
-                snippet: info.body?.slice(0, 120) || "",
-                body:    info.body    || ""
-              }];
-            }
-            renderEmailList("email-list",         emailCache, true);
-            renderEmailList("summary-email-list", emailCache, false);
-          });
-        } else {
-          renderEmailList("email-list",         emailCache, true);
-          renderEmailList("summary-email-list", emailCache, false);
+function fetchEmailsFromTab(tabId) {
+  chrome.tabs.sendMessage(tabId, { type: "GET_EMAIL_LIST" }, (emails) => {
+    void chrome.runtime.lastError;
+    emailCache = emails || [];
+
+    if (!emailCache.length) {
+      // On a single-email view — fall back to GET_EMAIL_INFO
+      chrome.tabs.sendMessage(tabId, { type: "GET_EMAIL_INFO" }, (info) => {
+        void chrome.runtime.lastError;
+        if (info && (info.subject || info.sender)) {
+          emailCache = [{
+            id:      "current",
+            sender:  info.sender  || "",
+            subject: info.subject || "(no subject)",
+            snippet: (info.body || "").slice(0, 120),
+            body:    info.body   || ""
+          }];
         }
+        renderEmailList("email-list",         emailCache, true);
+        renderEmailList("summary-email-list", emailCache, false);
       });
-    });
+    } else {
+      renderEmailList("email-list",         emailCache, true);
+      renderEmailList("summary-email-list", emailCache, false);
+    }
   });
 }
 

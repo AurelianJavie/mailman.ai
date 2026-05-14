@@ -1,5 +1,14 @@
 // content.js — MailMan.ai Gmail content script
 
+// Guard against duplicate injection — if already loaded, skip re-registering.
+// chrome.scripting.executeScript can inject multiple times; without this guard
+// each popup open stacks another listener on top of the previous ones.
+if (!window.__mailmanLoaded) {
+  window.__mailmanLoaded = true;
+  initMailman();
+}
+
+function initMailman() {
 console.log("[MailMan.ai] content.js injected into", window.location.href);
 
 const emailClassCache = {};
@@ -102,3 +111,5 @@ function getCurrentEmailInfo() {
 
   return { subject, sender, body };
 }
+
+} // end initMailman

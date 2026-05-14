@@ -11,7 +11,8 @@
     "scripting",
     "activeTab",
     "tabs",
-    "clipboardWrite"
+    "clipboardWrite",
+    "alarms"
   ],
   "host_permissions": [
     "http://localhost:5000/*",
